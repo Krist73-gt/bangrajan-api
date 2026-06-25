@@ -262,7 +262,54 @@ export class MembersService {
     };
   }
 
+  // ─── Adjust Sessions ─────────────────────────────────────
+  async adjustSessions(
+    id: number,
+    data: { delta: number; notes?: string },
+    adminUserId: string,
+  ) {
+    const [member] = await this.db
+      .select()
+      .from(memberProfiles)
+      .where(eq(memberProfiles.id, id))
+      .limit(1);
+    if (!member) throw new NotFoundException('Member tidak ditemukan.');
 
+    const newSessions = Math.max(0, member.remainingSessions + data.delta);
+    let newStatus = member.status;
+    if (newSessions === 0) {
+      newStatus =
+        new Date(member.expiryDate) < new Date() ? 'Expired' : 'Warning';
+    } else {
+      newStatus = 'Aktif';
+    }
+
+    await this.db
+      .update(memberProfiles)
+      .set({
+        remainingSessions: newSessions,
+        status: newStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(memberProfiles.id, id));
+
+    // Record transaction
+    await this.db.insert(transactions).values({
+      memberProfileId: id,
+      actionType: data.delta > 0 ? 'add_session' : 'reduce_session',
+      sessionsDelta: data.delta,
+      notes:
+        data.notes ||
+        `Penyesuaian manual: ${data.delta > 0 ? '+' : ''}${data.delta} sesi`,
+      createdBy: adminUserId,
+    });
+
+    return {
+      message: `Sesi berhasil disesuaikan.`,
+      sessions: { old: member.remainingSessions, new: newSessions },
+      status: newStatus,
+    };
+  }
 
   // ─── Get Expiring Soon (H-3) ─────────────────────────────
   async getExpiringSoon() {

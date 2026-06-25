@@ -93,7 +93,15 @@ export class MembersController {
     return this.membersService.renewPackage(id, body, user.id);
   }
 
-
+  @Post(':id/adjust-sessions')
+  @ApiOperation({ summary: 'Manual session adjustment (logged in audit)' })
+  adjustSessions(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { delta: number; notes?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.membersService.adjustSessions(id, body, user.id);
+  }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete member profile' })
