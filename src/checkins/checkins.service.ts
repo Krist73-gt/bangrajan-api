@@ -45,7 +45,9 @@ export class CheckinsService {
 
     // Check for Cooldown (90 minutes)
     const [lastCheckin] = await this.db
-      .select({ checkinTime: checkinLogs.checkinTime })
+      .select({
+        diffMins: sql<number>`EXTRACT(EPOCH FROM (NOW() - ${checkinLogs.checkinTime})) / 60`
+      })
       .from(checkinLogs)
       .where(
         and(
@@ -56,10 +58,9 @@ export class CheckinsService {
       .orderBy(desc(checkinLogs.checkinTime))
       .limit(1);
 
-    if (lastCheckin) {
-      const diffMs = today.getTime() - lastCheckin.checkinTime.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      if (diffMins < 90) {
+    if (lastCheckin && lastCheckin.diffMins !== null) {
+      const diffMins = Math.floor(lastCheckin.diffMins);
+      if (diffMins >= 0 && diffMins < 90) {
         return {
           success: false,
           name: member.fullName,
