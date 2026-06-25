@@ -275,6 +275,7 @@ export class MembersService {
       .limit(1);
     if (!member) throw new NotFoundException('Member tidak ditemukan.');
 
+    const oldSessions = member.remainingSessions;
     const newSessions = Math.max(0, member.remainingSessions + data.delta);
     let newStatus = member.status;
     if (newSessions === 0) {
@@ -293,14 +294,17 @@ export class MembersService {
       })
       .where(eq(memberProfiles.id, id));
 
+    const changeText = `(Sesi: ${oldSessions} → ${newSessions})`;
+    const finalNotes = data.notes && data.notes.trim() !== '' 
+      ? `${data.notes} ${changeText}` 
+      : `Penyesuaian manual ${changeText}`;
+
     // Record transaction
     await this.db.insert(transactions).values({
       memberProfileId: id,
       actionType: data.delta > 0 ? 'add_session' : 'reduce_session',
       sessionsDelta: data.delta,
-      notes:
-        data.notes ||
-        `Penyesuaian manual: ${data.delta > 0 ? '+' : ''}${data.delta} sesi`,
+      notes: finalNotes,
       createdBy: adminUserId,
     });
 
