@@ -211,6 +211,7 @@ export class DashboardService {
       .limit(20);
 
     return {
+      id: member.id,
       fullName: member.fullName,
       barcode: member.barcode,
       remainingSessions: member.remainingSessions,
