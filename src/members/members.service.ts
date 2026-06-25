@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { eq, like, sql, and, lte, gt, gte, desc } from 'drizzle-orm';
 import { DRIZZLE, type DrizzleDB } from '../db/drizzle.module.js';
-import { memberProfiles, packages, transactions } from '../db/schema/index.js';
+import { memberProfiles, packages, transactions, checkinLogs, user } from '../db/schema/index.js';
 
 @Injectable()
 export class MembersService {
@@ -262,54 +262,7 @@ export class MembersService {
     };
   }
 
-  // ─── Adjust Sessions ─────────────────────────────────────
-  async adjustSessions(
-    id: number,
-    data: { delta: number; notes?: string },
-    adminUserId: string,
-  ) {
-    const [member] = await this.db
-      .select()
-      .from(memberProfiles)
-      .where(eq(memberProfiles.id, id))
-      .limit(1);
-    if (!member) throw new NotFoundException('Member tidak ditemukan.');
 
-    const newSessions = Math.max(0, member.remainingSessions + data.delta);
-    let newStatus = member.status;
-    if (newSessions === 0) {
-      newStatus =
-        new Date(member.expiryDate) < new Date() ? 'Expired' : 'Warning';
-    } else {
-      newStatus = 'Aktif';
-    }
-
-    await this.db
-      .update(memberProfiles)
-      .set({
-        remainingSessions: newSessions,
-        status: newStatus,
-        updatedAt: new Date(),
-      })
-      .where(eq(memberProfiles.id, id));
-
-    // Record transaction
-    await this.db.insert(transactions).values({
-      memberProfileId: id,
-      actionType: data.delta > 0 ? 'add_session' : 'reduce_session',
-      sessionsDelta: data.delta,
-      notes:
-        data.notes ||
-        `Manual adjustment: ${data.delta > 0 ? '+' : ''}${data.delta} sesi`,
-      createdBy: adminUserId,
-    });
-
-    return {
-      message: `Sesi berhasil disesuaikan.`,
-      sessions: { old: member.remainingSessions, new: newSessions },
-      status: newStatus,
-    };
-  }
 
   // ─── Get Expiring Soon (H-3) ─────────────────────────────
   async getExpiringSoon() {
@@ -379,6 +332,44 @@ export class MembersService {
       .where(eq(memberProfiles.userId, userId))
       .limit(1);
     return member || null;
+  }
+
+  // ─── Get Activity History (Audit Log) ────────────────────
+  async getActivityHistory(memberProfileId: number) {
+    // Get Checkins
+    const checkins = await this.db
+      .select({
+        id: checkinLogs.id,
+        type: sql<string>`'checkin'`,
+        action: checkinLogs.status,
+        description: checkinLogs.sessionType,
+        createdAt: checkinLogs.createdAt,
+        createdBy: user.name,
+      })
+      .from(checkinLogs)
+      .leftJoin(user, eq(checkinLogs.createdBy, user.id))
+      .where(eq(checkinLogs.memberProfileId, memberProfileId));
+
+    // Get Transactions
+    const trans = await this.db
+      .select({
+        id: transactions.id,
+        type: sql<string>`'transaction'`,
+        action: transactions.actionType,
+        description: transactions.notes,
+        createdAt: transactions.createdAt,
+        createdBy: user.name,
+      })
+      .from(transactions)
+      .leftJoin(user, eq(transactions.createdBy, user.id))
+      .where(eq(transactions.memberProfileId, memberProfileId));
+
+    // Combine and sort
+    const history = [...checkins, ...trans].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    );
+
+    return history;
   }
 
   // ─── Delete Member ───────────────────────────────────────

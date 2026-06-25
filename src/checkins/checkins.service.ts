@@ -42,6 +42,38 @@ export class CheckinsService {
     }
 
     const today = new Date();
+
+    // Check for Cooldown (90 minutes)
+    const [lastCheckin] = await this.db
+      .select({ checkinTime: checkinLogs.checkinTime })
+      .from(checkinLogs)
+      .where(
+        and(
+          eq(checkinLogs.memberProfileId, member.id),
+          eq(checkinLogs.status, 'Berhasil')
+        )
+      )
+      .orderBy(desc(checkinLogs.checkinTime))
+      .limit(1);
+
+    if (lastCheckin) {
+      const diffMs = today.getTime() - lastCheckin.checkinTime.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      if (diffMins < 90) {
+        return {
+          success: false,
+          name: member.fullName,
+          plan: member.packageCategory || '-',
+          sessions: {
+            old: member.remainingSessions,
+            new: member.remainingSessions,
+          },
+          expiry: member.expiryDate,
+          message: `Cooldown aktif. Member baru saja absen. Silakan tunggu ${90 - diffMins} menit lagi.`,
+        };
+      }
+    }
+
     const expiryDate = new Date(member.expiryDate);
     const isExpired = expiryDate < today;
     const noSessions = member.remainingSessions <= 0;

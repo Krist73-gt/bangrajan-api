@@ -53,6 +53,12 @@ export class MembersController {
     return this.membersService.findOne(id);
   }
 
+  @Get(':id/activity')
+  @ApiOperation({ summary: 'Get member activity history (audit log)' })
+  getActivityHistory(@Param('id', ParseIntPipe) id: number) {
+    return this.membersService.getActivityHistory(id);
+  }
+
   @Post()
   @ApiOperation({ summary: 'Create new member (admin register)' })
   create(
@@ -87,15 +93,7 @@ export class MembersController {
     return this.membersService.renewPackage(id, body, user.id);
   }
 
-  @Post(':id/adjust-sessions')
-  @ApiOperation({ summary: 'Manual add/reduce sessions' })
-  adjustSessions(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() body: { delta: number; notes?: string },
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.membersService.adjustSessions(id, body, user.id);
-  }
+
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete member profile' })
