@@ -68,7 +68,7 @@ export class DashboardService {
         .from(memberProfiles)
         .where(gte(memberProfiles.createdAt, monthStart)),
 
-      // Recent check-ins today (last 5)
+      // Recent check-ins (last 5 globally)
       this.db
         .select({
           id: checkinLogs.id,
@@ -84,12 +84,6 @@ export class DashboardService {
           eq(checkinLogs.memberProfileId, memberProfiles.id),
         )
         .leftJoin(packages, eq(memberProfiles.packageId, packages.id))
-        .where(
-          and(
-            gte(checkinLogs.checkinTime, todayStart),
-            lte(checkinLogs.checkinTime, todayEnd),
-          ),
-        )
         .orderBy(desc(checkinLogs.checkinTime))
         .limit(5),
 
