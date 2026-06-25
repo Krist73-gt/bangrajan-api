@@ -19,7 +19,11 @@ export type DrizzleDB = ReturnType<typeof drizzle<typeof schema>>;
         if (!databaseUrl) {
           throw new Error('DATABASE_URL is not defined');
         }
-        const client = postgres(databaseUrl);
+        const client = postgres(databaseUrl, {
+          connection: {
+            timezone: 'Asia/Jakarta' // Pastikan database mencatat waktu sebagai WIB
+          }
+        });
         return drizzle(client, { schema });
       },
     },
