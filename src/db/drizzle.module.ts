@@ -22,6 +22,16 @@ export type DrizzleDB = ReturnType<typeof drizzle<typeof schema>>;
         const client = postgres(databaseUrl, {
           connection: {
             timezone: 'Asia/Jakarta' // Pastikan database mencatat waktu sebagai WIB
+          },
+          // Paksa postgres.js mem-parsing timestamp (tipe 1114) menjadi Date dengan offset +07:00
+          // Ini memotong bug Date() bawaan Node.js yang mengambil zona waktu OS (UTC)
+          types: {
+            timestamp: {
+              to: 1114,
+              from: [1114],
+              serialize: (x: any) => (x instanceof Date ? x.toISOString() : x),
+              parse: (x: any) => new Date(x + '+07:00')
+            }
           }
         });
         return drizzle(client, { schema });
