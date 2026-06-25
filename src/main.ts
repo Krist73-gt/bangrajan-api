@@ -6,6 +6,11 @@ if (!globalThis.crypto) {
   globalThis.crypto = webcrypto;
 }
 
+// FORCE DEFAULT TIMEZONE TO WIB (JAKARTA)
+// Ini memperbaiki bug di mana Drizzle/Postgres membaca waktu 'tanpa zona waktu' 
+// dan menganggapnya sebagai UTC sehingga jam maju +7 jam (offset ganda).
+process.env.TZ = 'Asia/Jakarta';
+
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
