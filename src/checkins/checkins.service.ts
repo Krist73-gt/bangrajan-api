@@ -12,55 +12,94 @@ export class CheckinsService {
    * Validates member, deducts session, and logs the result.
    */
   async processScan(memberId: string, adminUserId: string) {
-    // Find member by barcode/member ID
-    const [member] = await this.db
-      .select({
-        id: memberProfiles.id,
-        memberId: memberProfiles.memberId,
-        fullName: memberProfiles.fullName,
-        remainingSessions: memberProfiles.remainingSessions,
-        expiryDate: memberProfiles.expiryDate,
-        status: memberProfiles.status,
-        packageName: packages.name,
-        packageCategory: packages.category,
-      })
-      .from(memberProfiles)
-      .leftJoin(packages, eq(memberProfiles.packageId, packages.id))
-      .where(eq(memberProfiles.memberId, memberId.toUpperCase().trim()))
-      .limit(1);
+    return await this.db.transaction(async (tx) => {
+      // Find member by barcode/member ID
+      const [member] = await tx
+        .select({
+          id: memberProfiles.id,
+          memberId: memberProfiles.memberId,
+          fullName: memberProfiles.fullName,
+          remainingSessions: memberProfiles.remainingSessions,
+          expiryDate: memberProfiles.expiryDate,
+          status: memberProfiles.status,
+          packageName: packages.name,
+          packageCategory: packages.category,
+        })
+        .from(memberProfiles)
+        .leftJoin(packages, eq(memberProfiles.packageId, packages.id))
+        .where(eq(memberProfiles.memberId, memberId.toUpperCase().trim()))
+        .limit(1);
 
-    if (!member) {
-      // Log failed attempt (unknown member)
-      return {
-        success: false,
-        name: 'Member Tidak Dikenal',
-        plan: '-',
-        sessions: { old: 0, new: 0 },
-        expiry: '-',
-        message: 'Barcode tidak valid. Member tidak ditemukan.',
-      };
-    }
+      if (!member) {
+        // Log failed attempt (unknown member)
+        return {
+          success: false,
+          name: 'Member Tidak Dikenal',
+          plan: '-',
+          sessions: { old: 0, new: 0 },
+          expiry: '-',
+          message: 'Barcode tidak valid. Member tidak ditemukan.',
+        };
+      }
 
-    const today = new Date();
+      // KUNCI TRANSAKSI UNTUK MEMBER INI (Mencegah Double Scan Concurrent / Race Condition)
+      // Setiap request scan bersamaan untuk member yang sama akan mengantri di sini
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${member.id})`);
 
-    // Check for Cooldown (90 minutes)
-    const [lastCheckin] = await this.db
-      .select({
-        diffMins: sql<number>`EXTRACT(EPOCH FROM (NOW() - ${checkinLogs.checkinTime})) / 60`
-      })
-      .from(checkinLogs)
-      .where(
-        and(
-          eq(checkinLogs.memberProfileId, member.id),
-          eq(checkinLogs.status, 'Berhasil')
+      const today = new Date();
+
+      // Check for Cooldown (90 minutes)
+      const [lastCheckin] = await tx
+        .select({
+          diffMins: sql<number>`EXTRACT(EPOCH FROM (NOW() - ${checkinLogs.checkinTime})) / 60`
+        })
+        .from(checkinLogs)
+        .where(
+          and(
+            eq(checkinLogs.memberProfileId, member.id),
+            eq(checkinLogs.status, 'Berhasil')
+          )
         )
-      )
-      .orderBy(desc(checkinLogs.checkinTime))
-      .limit(1);
+        .orderBy(desc(checkinLogs.checkinTime))
+        .limit(1);
 
-    if (lastCheckin && lastCheckin.diffMins !== null) {
-      const diffMins = Math.floor(lastCheckin.diffMins);
-      if (diffMins >= 0 && diffMins < 90) {
+      if (lastCheckin && lastCheckin.diffMins !== null) {
+        const diffMins = Math.floor(lastCheckin.diffMins);
+        if (diffMins >= 0 && diffMins < 90) {
+          return {
+            success: false,
+            name: member.fullName,
+            plan: member.packageCategory || '-',
+            sessions: {
+              old: member.remainingSessions,
+              new: member.remainingSessions,
+            },
+            expiry: member.expiryDate,
+            message: `Cooldown aktif. Member baru saja absen. Silakan tunggu ${90 - diffMins} menit lagi.`,
+          };
+        }
+      }
+
+      const expiryDate = new Date(member.expiryDate);
+      const isExpired = expiryDate < today;
+      const noSessions = member.remainingSessions <= 0;
+
+      // Determine session type based on time
+      const hour = today.getHours();
+      const sessionType = hour < 12 ? 'Sesi Pagi' : 'Sesi Sore';
+
+      if (isExpired || noSessions) {
+        // Log failed check-in
+        await tx.insert(checkinLogs).values({
+          memberProfileId: member.id,
+          status: 'Gagal',
+          sessionType,
+          sessionsBeforeCheckin: member.remainingSessions,
+          sessionsAfterCheckin: member.remainingSessions,
+          remarks: isExpired ? 'Paket expired' : 'Sesi habis',
+          createdBy: adminUserId,
+        });
+
         return {
           success: false,
           name: member.fullName,
@@ -70,79 +109,46 @@ export class CheckinsService {
             new: member.remainingSessions,
           },
           expiry: member.expiryDate,
-          message: `Cooldown aktif. Member baru saja absen. Silakan tunggu ${90 - diffMins} menit lagi.`,
+          message: isExpired
+            ? 'Paket telah expired. Silakan perpanjang.'
+            : 'Sesi latihan telah habis. Silakan perpanjang paket.',
         };
       }
-    }
 
-    const expiryDate = new Date(member.expiryDate);
-    const isExpired = expiryDate < today;
-    const noSessions = member.remainingSessions <= 0;
+      // Success — deduct session
+      const newSessions = member.remainingSessions - 1;
+      let newStatus = 'Aktif';
+      if (newSessions === 0) {
+        newStatus = 'Warning';
+      }
 
-    // Determine session type based on time
-    const hour = today.getHours();
-    const sessionType = hour < 12 ? 'Sesi Pagi' : 'Sesi Sore';
+      await tx
+        .update(memberProfiles)
+        .set({
+          remainingSessions: newSessions,
+          status: newStatus,
+          updatedAt: new Date(),
+        })
+        .where(eq(memberProfiles.id, member.id));
 
-    if (isExpired || noSessions) {
-      // Log failed check-in
-      await this.db.insert(checkinLogs).values({
+      // Log successful check-in
+      await tx.insert(checkinLogs).values({
         memberProfileId: member.id,
-        status: 'Gagal',
+        status: 'Berhasil',
         sessionType,
         sessionsBeforeCheckin: member.remainingSessions,
-        sessionsAfterCheckin: member.remainingSessions,
-        remarks: isExpired ? 'Paket expired' : 'Sesi habis',
+        sessionsAfterCheckin: newSessions,
         createdBy: adminUserId,
       });
 
       return {
-        success: false,
+        success: true,
         name: member.fullName,
         plan: member.packageCategory || '-',
-        sessions: {
-          old: member.remainingSessions,
-          new: member.remainingSessions,
-        },
+        sessions: { old: member.remainingSessions, new: newSessions },
         expiry: member.expiryDate,
-        message: isExpired
-          ? 'Paket telah expired. Silakan perpanjang.'
-          : 'Sesi latihan telah habis. Silakan perpanjang paket.',
       };
-    }
-
-    // Success — deduct session
-    const newSessions = member.remainingSessions - 1;
-    let newStatus = 'Aktif';
-    if (newSessions === 0) {
-      newStatus = 'Warning';
-    }
-
-    await this.db
-      .update(memberProfiles)
-      .set({
-        remainingSessions: newSessions,
-        status: newStatus,
-        updatedAt: new Date(),
-      })
-      .where(eq(memberProfiles.id, member.id));
-
-    // Log successful check-in
-    await this.db.insert(checkinLogs).values({
-      memberProfileId: member.id,
-      status: 'Berhasil',
-      sessionType,
-      sessionsBeforeCheckin: member.remainingSessions,
-      sessionsAfterCheckin: newSessions,
-      createdBy: adminUserId,
     });
-
-    return {
-      success: true,
-      name: member.fullName,
-      plan: member.packageCategory || '-',
-      sessions: { old: member.remainingSessions, new: newSessions },
-      expiry: member.expiryDate,
-    };
   }
 
   /**
