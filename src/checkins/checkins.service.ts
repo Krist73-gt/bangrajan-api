@@ -48,7 +48,7 @@ export class CheckinsService {
 
       const today = new Date();
 
-      // Check for Cooldown (90 minutes)
+      // Check for Cooldown (120 minutes)
       const [lastCheckin] = await tx
         .select({
           diffMins: sql<number>`EXTRACT(EPOCH FROM (NOW() - ${checkinLogs.checkinTime})) / 60`
@@ -65,7 +65,7 @@ export class CheckinsService {
 
       if (lastCheckin && lastCheckin.diffMins !== null) {
         const diffMins = Math.floor(lastCheckin.diffMins);
-        if (diffMins >= 0 && diffMins < 90) {
+        if (diffMins >= 0 && diffMins < 120) {
           return {
             success: false,
             name: member.fullName,
@@ -75,7 +75,7 @@ export class CheckinsService {
               new: member.remainingSessions,
             },
             expiry: member.expiryDate,
-            message: `Cooldown aktif. Member baru saja absen. Silakan tunggu ${90 - diffMins} menit lagi.`,
+            message: `Cooldown aktif. Member baru saja absen. Silakan tunggu ${120 - diffMins} menit lagi.`,
           };
         }
       }
